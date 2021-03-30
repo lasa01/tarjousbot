@@ -258,7 +258,8 @@ fn run() -> Result<()> {
                         .title(truncate(title, 256));
                     let result = send_message(&webhook, &webhook_url, &embed);
 
-                    if let Err(..) = result {
+                    if let Err(err) = result {
+                        eprintln!("sending message failed: {}", err);
                         failed = true;
                         break;
                     }
