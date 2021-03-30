@@ -1,3 +1,5 @@
+#![warn(clippy::all, clippy::pedantic)]
+
 use std::path;
 use std::io::prelude::*;
 use std::io;
@@ -31,9 +33,8 @@ fn try_read_u32(path: path::PathBuf) -> Result<Option<u32>> {
         Err(err) => {
             if let io::ErrorKind::NotFound = err.kind() {
                 return Ok(None)
-            } else {
-                return Err(err.into())
             }
+            return Err(err.into())
         },
     };
     Ok(file.read_u32::<LittleEndian>().ok())
@@ -77,6 +78,102 @@ fn get_post_id(post: ElementRef) -> Result<u32> {
         .ok_or(Error::Scraping)?
         .parse()
         .or(Err(Error::Scraping))
+}
+
+fn get_title<'a>(content: &'a str, default_title: &'a str) -> &'a str {
+    let title = content
+        .strip_prefix("Tuote:")
+        .unwrap_or(default_title)
+        .split('\n')
+        .next()
+        .unwrap_or(default_title);
+    title
+}
+
+fn get_content(post: ElementRef, content_selector: &Selector) -> Result<String> {
+    let content: String = post
+        .select(&content_selector)
+        .next()
+        .ok_or(Error::Scraping)?
+        .children()
+        .map(|child| {
+            match child.value() {
+                scraper::Node::Text(text) => text,
+                scraper::Node::Element(element) => {
+                    match element.name() {
+                        "br" => "\n",
+                        "a" => element.attr("href").unwrap_or(""),
+                        _ => {
+                            ElementRef::wrap(child)
+                                .unwrap()
+                                .text()
+                                .next()
+                                .unwrap_or("")
+                        },
+                    }
+                },
+                _ => "",
+            }
+        })
+        .collect();
+    Ok(content)
+}
+
+fn get_avatar_url(post: ElementRef, avatar_selector: &Selector) -> Result<Option<String>> {
+    let avatar_url = post
+        .select(&avatar_selector)
+        .next()
+        .map(|element| element
+            .value()
+            .attr("src")
+            .ok_or(Error::Scraping)
+            .map(|s| format!("https://bbs.io-tech.fi{}", s))
+        )
+        .transpose()?;
+    Ok(avatar_url)
+}
+
+fn get_user_url(username_element: ElementRef) -> Result<String> {
+    let user_url = format!("https://bbs.io-tech.fi{}", username_element
+        .value()
+        .attr("href")
+        .ok_or(Error::Scraping)?
+    );
+    Ok(user_url)
+}
+
+fn get_username_str(username_element: ElementRef) -> Result<&str> {
+    let username = username_element
+        .text()
+        .next()
+        .ok_or(Error::Scraping)?;
+    Ok(username)
+}
+
+fn get_username_element<'a>(post: ElementRef<'a>, username_selector: &Selector) -> Result<ElementRef<'a>> {
+    let username_element = post
+        .select(&username_selector)
+        .next()
+        .ok_or(Error::Scraping)?;
+    Ok(username_element)
+}
+
+fn get_timestamp<'a>(post: ElementRef<'a>, time_selector: &Selector) -> Result<&'a str> {
+    let timestamp = post
+        .select(&time_selector)
+        .next()
+        .ok_or(Error::Scraping)?
+        .value()
+        .attr("datetime")
+        .ok_or(Error::Scraping)?;
+    Ok(timestamp)
+}
+
+fn truncate(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        None => s,
+        Some((idx, _)) => &s[..idx],
+    }
 }
 
 fn run() -> Result<()> {
@@ -132,80 +229,24 @@ fn run() -> Result<()> {
                 if post_id > last_sent_id {
                     eprintln!("New message: id {}", post_id);
 
-                    let timestamp = post
-                        .select(&time_selector)
-                        .next()
-                        .ok_or(Error::Scraping)?
-                        .value()
-                        .attr("datetime")
-                        .ok_or(Error::Scraping)?;
+                    let timestamp = get_timestamp(post, &time_selector)?;
 
-                    let username_element = post
-                        .select(&username_selector)
-                        .next()
-                        .ok_or(Error::Scraping)?;
-                    let username = username_element
-                        .text()
-                        .next()
-                        .ok_or(Error::Scraping)?;
-                    let user_url = format!("https://bbs.io-tech.fi{}", username_element
-                        .value()
-                        .attr("href")
-                        .ok_or(Error::Scraping)?
-                    );
-                    
-                    let avatar_url = post
-                        .select(&avatar_selector)
-                        .next()
-                        .map(|element| element
-                            .value()
-                            .attr("src")
-                            .ok_or(Error::Scraping)
-                            .map(|s| format!("https://bbs.io-tech.fi{}", s))
-                        )
-                        .transpose()?;
-
-                    let content: String = post
-                        .select(&content_selector)
-                        .next()
-                        .ok_or(Error::Scraping)?
-                        .children()
-                        .map(|child| {
-                            match child.value() {
-                                scraper::Node::Text(text) => text,
-                                scraper::Node::Element(element) => {
-                                    match element.name() {
-                                        "br" => "\n",
-                                        "a" => element.attr("href").unwrap_or(""),
-                                        _ => {
-                                            ElementRef::wrap(child)
-                                                .unwrap()
-                                                .text()
-                                                .next()
-                                                .unwrap_or("")
-                                        },
-                                    }
-                                },
-                                _ => "",
-                            }
-                        })
-                        .collect();
+                    let username_element = get_username_element(post, &username_selector)?;
+                    let username = get_username_str(username_element)?;
+                    let user_url = get_user_url(username_element)?;                    
+                    let avatar_url = get_avatar_url(post, &avatar_selector)?;
+                    let content = get_content(post, &content_selector)?;
                     let default_title = "Uusi tarjous";
-                    let title = content
-                        .strip_prefix("Tuote:")
-                        .unwrap_or(default_title)
-                        .split("\n")
-                        .next()
-                        .unwrap_or(default_title);
+                    let title = get_title(&content, default_title);
 
                     eprintln!("Username: {}, Title: {}, Content: {}", username, title, content);
                     webhook
                         .execute(&webhook_url)
                         .embed(EmbedBuilder::new()
                             .timestamp(timestamp)
-                            .author(Some(username), Some(&user_url), avatar_url.as_deref())
-                            .description(&content)
-                            .title(title)
+                            .author(Some(truncate(username, 256)), Some(&user_url), avatar_url.as_deref())
+                            .description(truncate(&content, 2048))
+                            .title(truncate(title, 256))
                         )
                         .send()?.error_for_status()?;
 

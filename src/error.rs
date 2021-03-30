@@ -3,8 +3,6 @@ use std::fmt;
 use std::result;
 use std::io;
 
-use reqwest;
-
 #[derive(Debug)]
 pub enum Error {
     Io(io::Error),

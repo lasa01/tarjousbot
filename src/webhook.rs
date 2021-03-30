@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use reqwest::blocking::Client;
-use reqwest;
 use serde::Serialize;
 
 pub struct Webhook<'a> {
@@ -98,9 +97,7 @@ pub struct EmbedBuilder<'a> {
 impl<'a> EmbedBuilder<'a> {
     pub fn new() -> Self {
         Self {
-            embed: Embed {
-                ..Default::default()
-            }
+            embed: Embed::default()
         }
     }
 
@@ -220,9 +217,7 @@ impl<'a> Webhook<'a> {
         ExecutionBuilder {
             webhook: &self,
             url,
-            payload: ExecuteWebhook {
-                ..Default::default()
-            }
+            payload: ExecuteWebhook::default()
         }
     }
 }
