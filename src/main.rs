@@ -1,9 +1,9 @@
 #![warn(clippy::all, clippy::pedantic)]
 
-use std::path;
-use std::io::prelude::*;
-use std::io;
 use std::fs::File;
+use std::io;
+use std::io::prelude::*;
+use std::path;
 use std::path::Path;
 use std::process;
 
@@ -11,11 +11,11 @@ mod error;
 mod webhook;
 use crate::error::Error;
 use crate::error::Result;
-use crate::webhook::Webhook;
 use crate::webhook::EmbedBuilder;
+use crate::webhook::Webhook;
 
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use scraper::{ElementRef, Html, Selector};
-use byteorder::{ReadBytesExt, WriteBytesExt, LittleEndian};
 
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 static APP_STATE_DIRECTORY: &str = "/etc/tarjousbot";
@@ -32,10 +32,10 @@ fn try_read_u32(path: path::PathBuf) -> Result<Option<u32>> {
         Ok(f) => f,
         Err(err) => {
             if let io::ErrorKind::NotFound = err.kind() {
-                return Ok(None)
+                return Ok(None);
             }
-            return Err(err.into())
-        },
+            return Err(err.into());
+        }
     };
     Ok(file.read_u32::<LittleEndian>().ok())
 }
@@ -96,24 +96,14 @@ fn get_content(post: ElementRef, content_selector: &Selector) -> Result<String> 
         .next()
         .ok_or(Error::Scraping)?
         .children()
-        .map(|child| {
-            match child.value() {
-                scraper::Node::Text(text) => text,
-                scraper::Node::Element(element) => {
-                    match element.name() {
-                        "br" => "\n",
-                        "a" => element.attr("href").unwrap_or(""),
-                        _ => {
-                            ElementRef::wrap(child)
-                                .unwrap()
-                                .text()
-                                .next()
-                                .unwrap_or("")
-                        },
-                    }
-                },
-                _ => "",
-            }
+        .map(|child| match child.value() {
+            scraper::Node::Text(text) => text,
+            scraper::Node::Element(element) => match element.name() {
+                "br" => "\n",
+                "a" => element.attr("href").unwrap_or(""),
+                _ => ElementRef::wrap(child).unwrap().text().next().unwrap_or(""),
+            },
+            _ => "",
         })
         .collect();
     Ok(content)
@@ -123,34 +113,37 @@ fn get_avatar_url(post: ElementRef, avatar_selector: &Selector) -> Result<Option
     let avatar_url = post
         .select(&avatar_selector)
         .next()
-        .map(|element| element
-            .value()
-            .attr("src")
-            .ok_or(Error::Scraping)
-            .map(|s| format!("https://bbs.io-tech.fi{}", s))
-        )
+        .map(|element| {
+            element
+                .value()
+                .attr("src")
+                .ok_or(Error::Scraping)
+                .map(|s| format!("https://bbs.io-tech.fi{}", s))
+        })
         .transpose()?;
     Ok(avatar_url)
 }
 
 fn get_user_url(username_element: ElementRef) -> Result<String> {
-    let user_url = format!("https://bbs.io-tech.fi{}", username_element
-        .value()
-        .attr("href")
-        .ok_or(Error::Scraping)?
+    let user_url = format!(
+        "https://bbs.io-tech.fi{}",
+        username_element
+            .value()
+            .attr("href")
+            .ok_or(Error::Scraping)?
     );
     Ok(user_url)
 }
 
 fn get_username_str(username_element: ElementRef) -> Result<&str> {
-    let username = username_element
-        .text()
-        .next()
-        .ok_or(Error::Scraping)?;
+    let username = username_element.text().next().ok_or(Error::Scraping)?;
     Ok(username)
 }
 
-fn get_username_element<'a>(post: ElementRef<'a>, username_selector: &Selector) -> Result<ElementRef<'a>> {
+fn get_username_element<'a>(
+    post: ElementRef<'a>,
+    username_selector: &Selector,
+) -> Result<ElementRef<'a>> {
     let username_element = post
         .select(&username_selector)
         .next()
@@ -176,6 +169,15 @@ fn truncate(s: &str, max_chars: usize) -> &str {
     }
 }
 
+fn send_message(webhook: &Webhook, webhook_url: &str, embed: &EmbedBuilder) -> reqwest::Result<()> {
+    webhook
+        .execute(&webhook_url)
+        .embed(embed)
+        .send()?
+        .error_for_status()?;
+    Ok(())
+}
+
 fn run() -> Result<()> {
     let mut page_number = get_last_page()?.unwrap_or(u32::MAX);
     let last_sent_post = get_last_sent_post()?;
@@ -195,6 +197,7 @@ fn run() -> Result<()> {
     let content_selector = Selector::parse(".bbWrapper").unwrap();
 
     let mut last_id;
+    let mut failed = false;
 
     loop {
         eprintln!("Get page {}", page_number);
@@ -233,24 +236,34 @@ fn run() -> Result<()> {
 
                     let username_element = get_username_element(post, &username_selector)?;
                     let username = get_username_str(username_element)?;
-                    let user_url = get_user_url(username_element)?;                    
+                    let user_url = get_user_url(username_element)?;
                     let avatar_url = get_avatar_url(post, &avatar_selector)?;
                     let content = get_content(post, &content_selector)?;
                     let default_title = "Uusi tarjous";
                     let title = get_title(&content, default_title);
 
-                    eprintln!("Username: {}, Title: {}, Content: {}", username, title, content);
-                    webhook
-                        .execute(&webhook_url)
-                        .embed(EmbedBuilder::new()
-                            .timestamp(timestamp)
-                            .author(Some(truncate(username, 256)), Some(&user_url), avatar_url.as_deref())
-                            .description(truncate(&content, 2048))
-                            .title(truncate(title, 256))
+                    eprintln!(
+                        "Username: {}, Title: {}, Content: {}",
+                        username, title, content
+                    );
+                    let mut embed = EmbedBuilder::new();
+                    embed
+                        .timestamp(timestamp)
+                        .author(
+                            Some(truncate(username, 256)),
+                            Some(&user_url),
+                            avatar_url.as_deref(),
                         )
-                        .send()?.error_for_status()?;
+                        .description(truncate(&content, 2048))
+                        .title(truncate(title, 256));
+                    let result = send_message(&webhook, &webhook_url, &embed);
 
-                    last_id_temp = post_id
+                    if let Err(..) = result {
+                        failed = true;
+                        break;
+                    }
+
+                    last_id_temp = post_id;
                 }
             }
             last_id = last_id_temp;
@@ -258,17 +271,19 @@ fn run() -> Result<()> {
             last_id = get_post_id(posts.last().ok_or(Error::Scraping)?)?;
         }
 
-        match fragment.select(&next_page_selector).next() {
-            Some(next_page) => {
+        if !failed {
+            if let Some(next_page) = fragment.select(&next_page_selector).next() {
                 page_number = next_page
                     .text()
                     .next()
                     .ok_or(Error::Scraping)?
                     .parse()
                     .or(Err(Error::Scraping))?;
+                continue;
             }
-            None => break,
         }
+
+        break;
     }
 
     set_last_page(page_number)?;

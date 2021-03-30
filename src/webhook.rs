@@ -9,9 +9,7 @@ pub struct Webhook<'a> {
 
 impl<'a> Webhook<'a> {
     pub fn with_client(client: &'a Client) -> Self {
-        Self {
-            client,
-        }
+        Self { client }
     }
 }
 
@@ -97,7 +95,7 @@ pub struct EmbedBuilder<'a> {
 impl<'a> EmbedBuilder<'a> {
     pub fn new() -> Self {
         Self {
-            embed: Embed::default()
+            embed: Embed::default(),
         }
     }
 
@@ -127,28 +125,26 @@ impl<'a> EmbedBuilder<'a> {
     }
 
     pub fn footer(&mut self, text: &'a str, icon_url: Option<&'a str>) -> &mut Self {
-        self.embed.footer = Some(EmbedFooter {
-            text,
-            icon_url,
-        });
+        self.embed.footer = Some(EmbedFooter { text, icon_url });
         self
     }
 
     pub fn image(&mut self, url: &'a str) -> &mut Self {
-        self.embed.image = Some(EmbedImage {
-            url
-        });
+        self.embed.image = Some(EmbedImage { url });
         self
     }
 
     pub fn thumbnail(&mut self, url: &'a str) -> &mut Self {
-        self.embed.thumbnail = Some(EmbedThumbnail {
-            url
-        });
+        self.embed.thumbnail = Some(EmbedThumbnail { url });
         self
     }
 
-    pub fn author(&mut self, name: Option<&'a str>, url: Option<&'a str>, icon_url: Option<&'a str>) -> &mut Self {
+    pub fn author(
+        &mut self,
+        name: Option<&'a str>,
+        url: Option<&'a str>,
+        icon_url: Option<&'a str>,
+    ) -> &mut Self {
         self.embed.author = Some(EmbedAuthor {
             name,
             url,
@@ -205,7 +201,8 @@ impl<'a> ExecutionBuilder<'a> {
     }
 
     pub fn send(&self) -> reqwest::Result<reqwest::blocking::Response> {
-        self.webhook.client
+        self.webhook
+            .client
             .post(self.url)
             .json(&self.payload)
             .send()
@@ -217,7 +214,7 @@ impl<'a> Webhook<'a> {
         ExecutionBuilder {
             webhook: &self,
             url,
-            payload: ExecuteWebhook::default()
+            payload: ExecuteWebhook::default(),
         }
     }
 }
